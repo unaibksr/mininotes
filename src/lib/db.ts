@@ -83,6 +83,24 @@ export async function getAllTombstones(): Promise<{ id: string; type: 'note' | '
   return db.getAll('tombstones');
 }
 
+export async function clearAllTombstones(): Promise<void> {
+  const db = await getDatabase();
+  await db.clear('tombstones');
+}
+
+/**
+ * Hard-reset the local DB: delete all notes, folders, and tombstones.
+ * Use this for a true "fresh start". Caller should reload the page after.
+ */
+export async function resetLocalDatabase(): Promise<void> {
+  const db = await getDatabase();
+  const tx = db.transaction(['notes', 'folders', 'tombstones'], 'readwrite');
+  await tx.objectStore('notes').clear();
+  await tx.objectStore('folders').clear();
+  await tx.objectStore('tombstones').clear();
+  await tx.done;
+}
+
 // ---------------- NOTES STORAGE ----------------
 
 export async function getActiveNotes(): Promise<Note[]> {

@@ -9,6 +9,7 @@ import {
   ExternalLink,
   ShieldCheck,
   AlertCircle,
+  Trash2,
 } from 'lucide-react';
 import {
   getSavedSupabaseConfig,
@@ -17,6 +18,7 @@ import {
   getCapabilities,
   SUPABASE_SQL_SETUP,
 } from '../lib/supabase';
+import { resetLocalDatabase, clearAllTombstones, getAllTombstones } from '../lib/db';
 import { SyncState, ConnectionStatus } from '../types';
 
 interface SyncSettingsModalProps {
@@ -272,7 +274,57 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
             {SUPABASE_SQL_SETUP}
           </pre>
         </div>
+
+        {/* Local data controls */}
+        <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-800">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2">
+            <Trash2 className="w-3.5 h-3.5 text-slate-400" />
+            <span>Local Data Controls</span>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <button
+              type="button"
+              onClick={async () => {
+                if (!confirm('Clear tombstones? Deleted notes may resurrect on next pull if other devices still have them.')) return;
+                await clearAllTombstones();
+                onRefreshData();
+              }}
+              className="flex-1 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition cursor-pointer"
+            >
+              Clear tombstones
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!confirm('Reset local data? This wipes all notes, folders, and tombstones from THIS device. Reload to start fresh.')) return;
+                await resetLocalDatabase();
+                window.location.reload();
+              }}
+              className="flex-1 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-rose-600 hover:bg-rose-700 text-white transition cursor-pointer"
+            >
+              Reset local data
+            </button>
+          </div>
+          <p className="mt-2 text-[10px] text-slate-500 dark:text-slate-400">
+            Tombstone count: <span className="font-mono">{useTombstoneCount()}</span>. After reset, the app will re-seed 2 welcome notes.
+          </p>
+        </div>
       </div>
     </div>
   );
 };
+
+// Tiny hook to read tombstone count for display
+function useTombstoneCount(): number {
+  const [count, setCount] = React.useState(0);
+  React.useEffect(() => {
+    let mounted = true;
+    getAllTombstones().then((t) => {
+      if (mounted) setCount(t.length);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+  return count;
+}
