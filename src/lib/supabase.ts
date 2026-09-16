@@ -57,6 +57,8 @@ export function saveSupabaseConfig(config: SupabaseConfig): void {
     noteFolderId: false,
     notePinned: false,
     folderColor: false,
+    noteDeleted: false,
+    folderDeleted: false,
     probed: false,
   };
   // Force a fresh connection probe on next verifyConnection().
@@ -109,6 +111,8 @@ let capabilities: SyncCapabilities = {
   noteFolderId: false,
   notePinned: false,
   folderColor: false,
+  noteDeleted: false,
+  folderDeleted: false,
   probed: false,
 };
 
@@ -211,23 +215,27 @@ export async function probeCapabilities(supabase: SupabaseClient): Promise<SyncC
     noteFolderId: false,
     notePinned: false,
     folderColor: false,
+    noteDeleted: false,
+    folderDeleted: false,
     probed: true,
   };
 
   try {
-    // 1. Probe folders table & color column
+    // 1. Probe folders table & color/deleted columns
     const { data: folderData, error: folderErr } = await supabase
       .from('folders')
-      .select('id, color')
+      .select('id, color, deleted')
       .limit(1);
 
     if (!folderErr) {
       caps.foldersTable = true;
       caps.folderColor = true;
+      caps.folderDeleted = true;
     } else if (folderErr.code === '42703') {
       // column does not exist, but table might
       caps.foldersTable = true;
       caps.folderColor = false;
+      caps.folderDeleted = false;
     } else {
       caps.foldersTable = false;
     }
@@ -236,28 +244,33 @@ export async function probeCapabilities(supabase: SupabaseClient): Promise<SyncC
   }
 
   try {
-    // 2. Probe notes columns (folder_id, pinned)
+    // 2. Probe notes columns (folder_id, pinned, deleted)
     const { error: noteColErr } = await supabase
       .from('notes')
-      .select('id, folder_id, pinned')
+      .select('id, folder_id, pinned, deleted')
       .limit(1);
 
     if (!noteColErr) {
       caps.noteFolderId = true;
       caps.notePinned = true;
+      caps.noteDeleted = true;
     } else if (noteColErr.code === '42703') {
       // Try individually
       const { error: fidErr } = await supabase.from('notes').select('folder_id').limit(1);
       caps.noteFolderId = !fidErr;
       const { error: pinErr } = await supabase.from('notes').select('pinned').limit(1);
       caps.notePinned = !pinErr;
+      const { error: delErr } = await supabase.from('notes').select('deleted').limit(1);
+      caps.noteDeleted = !delErr;
     } else {
       caps.noteFolderId = false;
       caps.notePinned = false;
+      caps.noteDeleted = false;
     }
   } catch (e) {
     caps.noteFolderId = false;
     caps.notePinned = false;
+    caps.noteDeleted = false;
   }
 
   capabilities = caps;
@@ -356,11 +369,17 @@ export async function triggerSync(): Promise<void> {
     if (capabilities.notePinned) noteSelectCols.push('pinned');
     noteSelectCols.push('color');
 
-    const { data: remoteNotesRaw, error: notesPullErr } = (await supabase
+    let notesQuery = supabase
       .from('notes')
       .select(noteSelectCols.join(','))
-      .gt('updated_at', lastSync)
-      .eq('deleted', false)) as { data: any[] | null; error: any };
+      .gt('updated_at', lastSync);
+    if (capabilities.noteDeleted) {
+      notesQuery = notesQuery.eq('deleted', false);
+    }
+    const { data: remoteNotesRaw, error: notesPullErr } = (await notesQuery) as {
+      data: any[] | null;
+      error: any;
+    };
 
     if (notesPullErr) {
       throw notesPullErr;
@@ -373,11 +392,17 @@ export async function triggerSync(): Promise<void> {
       const folderSelectCols = ['id', 'name', 'updated_at'];
       if (capabilities.folderColor) folderSelectCols.push('color');
 
-      const { data: fData, error: folderPullErr } = (await supabase
+      let folderQuery = supabase
         .from('folders')
         .select(folderSelectCols.join(','))
-        .gt('updated_at', lastSync)
-        .eq('deleted', false)) as { data: any[] | null; error: any };
+        .gt('updated_at', lastSync);
+      if (capabilities.folderDeleted) {
+        folderQuery = folderQuery.eq('deleted', false);
+      }
+      const { data: fData, error: folderPullErr } = (await folderQuery) as {
+        data: any[] | null;
+        error: any;
+      };
 
       if (folderPullErr) {
         throw folderPullErr;
@@ -466,6 +491,52 @@ export async function triggerSync(): Promise<void> {
       notifyDataChanged();
     }
 
+    // ---- Cross-device delete reconciliation ----
+    // Every local note that is fully synced AND no longer appears in the
+    // remote active set (filtered by deleted=false) was deleted on another
+    // device. Hard-delete and tombstone it locally.
+    {
+      const remoteActiveIds = new Set(remoteNotes.map((r: any) => r.id));
+      const ghostNoteIds: string[] = [];
+      for (const [id, local] of localNoteMap.entries()) {
+        if (remoteActiveIds.has(id)) continue;
+        if (tombstonedNoteIds.has(id)) continue;
+        if (!local.synced) continue; // only reconcile confirmed-synced rows
+        if (unsavedNoteIds.has(id)) continue;
+        if (activeEditingNoteId === id && !local.synced) continue;
+        ghostNoteIds.push(id);
+      }
+      if (ghostNoteIds.length > 0) {
+        for (const gid of ghostNoteIds) {
+          await hardDeleteNote(gid);
+          await addTombstone('note', gid);
+        }
+        notifyDataChanged();
+      }
+    }
+
+    // ---- Cross-device folder delete reconciliation ----
+    if (capabilities.foldersTable) {
+      const remoteActiveFolderIds = new Set(remoteFolders.map((r: any) => r.id));
+      const tombstonedFolderIds = new Set(
+        tombstones.filter((t) => t.type === 'folder').map((t) => t.id.split(':')[1])
+      );
+      const ghostFolderIds: string[] = [];
+      for (const [id, local] of localFolderMap.entries()) {
+        if (remoteActiveFolderIds.has(id)) continue;
+        if (tombstonedFolderIds.has(id)) continue;
+        if (!local.synced) continue;
+        ghostFolderIds.push(id);
+      }
+      if (ghostFolderIds.length > 0) {
+        for (const gid of ghostFolderIds) {
+          await hardDeleteFolder(gid);
+          await addTombstone('folder', gid);
+        }
+        notifyDataChanged();
+      }
+    }
+
     // 2. PUSH PHASE (Local -> Remote)
     // Gather unsynced items
     const reloadedNotes = await getAllNotesIncludingDeleted();
@@ -474,14 +545,20 @@ export async function triggerSync(): Promise<void> {
     const successfulSyncedNoteIds: string[] = [];
     for (const note of unsyncedNotes) {
       if (note.deleted) {
-        // Soft-deleted note -> mark deleted=true on the server (so cross-device
-        // clients can pick it up on pull). The local row will be hard-deleted
-        // by markNotesAsSynced after a successful push.
-        const { error: delErr } = await supabase
-          .from('notes')
-          .update({ deleted: true, updated_at: note.updatedAt })
-          .eq('id', note.id);
-        if (!delErr) {
+        let err: any = null;
+        if (capabilities.noteDeleted) {
+          // Soft-delete: mark deleted=true on server.
+          const res = await supabase
+            .from('notes')
+            .update({ deleted: true, updated_at: note.updatedAt })
+            .eq('id', note.id);
+          err = res.error;
+        } else {
+          // Fallback: hard DELETE (less reliable cross-device).
+          const res = await supabase.from('notes').delete().eq('id', note.id);
+          err = res.error;
+        }
+        if (!err) {
           successfulSyncedNoteIds.push(note.id);
         }
       } else {
@@ -683,7 +760,17 @@ export function setupRealtimeSubscription(): () => void {
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          console.warn('Realtime channel status:', status);
+        }
+        // When the realtime channel goes SUBSCRIBED, run an immediate full
+        // pull so we catch up on anything that happened while we were
+        // disconnected.
+        if (status === 'SUBSCRIBED') {
+          triggerSync();
+        }
+      });
 
     return () => {
       if (realtimeChannel && supabase) {

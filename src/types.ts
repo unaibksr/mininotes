@@ -142,5 +142,7 @@ export interface SyncCapabilities {
   noteFolderId: boolean;
   notePinned: boolean;
   folderColor: boolean;
+  noteDeleted: boolean;
+  folderDeleted: boolean;
   probed: boolean;
 }

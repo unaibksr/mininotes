@@ -228,7 +228,15 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
               <div>folder color: {caps.folderColor ? '✅ Yes' : '⚠️ Missing'}</div>
               <div>notes.folder_id: {caps.noteFolderId ? '✅ Yes' : '⚠️ Missing'}</div>
               <div>notes.pinned: {caps.notePinned ? '✅ Yes' : '⚠️ Missing'}</div>
+              <div>notes.deleted: {caps.noteDeleted ? '✅ Yes' : '⚠️ Run SQL'}</div>
+              <div>folders.deleted: {caps.folderDeleted ? '✅ Yes' : '⚠️ Run SQL'}</div>
             </div>
+            {(!caps.noteDeleted || !caps.folderDeleted) && (
+              <div className="mt-2 p-2 rounded-md bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/50 text-amber-800 dark:text-amber-300">
+                <strong>Run the SQL below</strong> to add the <code>deleted</code> column.
+                Without it, deleted notes may resurrect across devices.
+              </div>
+            )}
           </div>
         )}
 

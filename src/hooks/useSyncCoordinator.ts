@@ -68,11 +68,11 @@ export function useSyncCoordinator(onRefreshData: () => void) {
     };
     window.addEventListener('focus', handleFocus);
 
-    // Trigger 5: Every 30 seconds
+    // Trigger 5: Every 5 seconds for fast cross-device reconciliation
     const interval = setInterval(() => {
       void verifyConnection();
       triggerSync();
-    }, 30000);
+    }, 5000);
 
     // Re-probe whenever the browser's online state flips.
     const handleOnline = () => void verifyConnection();
