@@ -153,6 +153,11 @@ export async function hardDeleteNote(id: string): Promise<void> {
   await db.delete('notes', id);
 }
 
+export async function hardDeleteFolder(id: string): Promise<void> {
+  const db = await getDatabase();
+  await db.delete('folders', id);
+}
+
 // ---------------- FOLDERS STORAGE ----------------
 
 export async function getActiveFolders(): Promise<Folder[]> {

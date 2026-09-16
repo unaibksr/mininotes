@@ -9,6 +9,9 @@ import {
   markFoldersAsSynced,
   getAllTombstones,
   isTombstoned,
+  addTombstone,
+  hardDeleteNote,
+  hardDeleteFolder,
 } from './db';
 
 const STORAGE_KEY_CONFIG = 'minimalist_notes_supabase_config';
@@ -380,6 +383,34 @@ export async function triggerSync(): Promise<void> {
       remoteFolders = fData || [];
     }
 
+    // ---- Ghost cleanup (cross-device deletes) ----
+    // Fetch ALL remote note ids so we can detect notes that disappeared
+    // (because they were deleted on another device while we were offline).
+    let allRemoteNoteIds: Set<string> | null = null;
+    let allRemoteFolderIds: Set<string> | null = null;
+    try {
+      const { data: idRows, error: idErr } = (await supabase
+        .from('notes')
+        .select('id')) as { data: any[] | null; error: any };
+      if (!idErr && idRows) {
+        allRemoteNoteIds = new Set(idRows.map((r: any) => r.id));
+      }
+    } catch {
+      // Best-effort; if it fails we fall back to no ghost cleanup.
+    }
+    if (capabilities.foldersTable) {
+      try {
+        const { data: fIdRows, error: fIdErr } = (await supabase
+          .from('folders')
+          .select('id')) as { data: any[] | null; error: any };
+        if (!fIdErr && fIdRows) {
+          allRemoteFolderIds = new Set(fIdRows.map((r: any) => r.id));
+        }
+      } catch {
+        // Best-effort.
+      }
+    }
+
     // Process pull with Last-Write-Wins and protect local unsaved rows
     const allLocalNotes = await getAllNotesIncludingDeleted();
     const localNoteMap = new Map(allLocalNotes.map((n) => [n.id, n]));
@@ -459,6 +490,52 @@ export async function triggerSync(): Promise<void> {
     if (foldersToUpdateLocally.length > 0) {
       await putFoldersBatch(foldersToUpdateLocally);
       notifyDataChanged();
+    }
+
+    // ---- Ghost cleanup for notes ----
+    // Any local note (not currently edited/unsynced) that doesn't exist on
+    // the remote AND isn't tombstoned on this device was deleted on another
+    // device. Hard-delete and tombstone it locally.
+    if (allRemoteNoteIds) {
+      const ghostIds: string[] = [];
+      for (const [id, local] of localNoteMap.entries()) {
+        if (allRemoteNoteIds.has(id)) continue;
+        if (tombstonedNoteIds.has(id)) continue;
+        if (local.deleted) continue; // already pending local delete
+        if (unsavedNoteIds.has(id)) continue;
+        if (activeEditingNoteId === id && !local.synced) continue;
+        ghostIds.push(id);
+      }
+      if (ghostIds.length > 0) {
+        for (const gid of ghostIds) {
+          await hardDeleteNote(gid);
+          await addTombstone('note', gid);
+        }
+        notifyDataChanged();
+      }
+    }
+
+    // ---- Ghost cleanup for folders ----
+    if (allRemoteFolderIds && capabilities.foldersTable) {
+      const localFolders = await getAllFoldersIncludingDeleted();
+      const localFolderMap2 = new Map(localFolders.map((f) => [f.id, f]));
+      const tombstonedFolderIds = new Set(
+        tombstones.filter((t) => t.type === 'folder').map((t) => t.id.split(':')[1])
+      );
+      const ghostFolderIds: string[] = [];
+      for (const [id, local] of localFolderMap2.entries()) {
+        if (allRemoteFolderIds.has(id)) continue;
+        if (tombstonedFolderIds.has(id)) continue;
+        if (local.deleted) continue;
+        ghostFolderIds.push(id);
+      }
+      if (ghostFolderIds.length > 0) {
+        for (const gid of ghostFolderIds) {
+          await hardDeleteFolder(gid);
+          await addTombstone('folder', gid);
+        }
+        notifyDataChanged();
+      }
     }
 
     // 2. PUSH PHASE (Local -> Remote)
@@ -581,20 +658,18 @@ export function setupRealtimeSubscription(): () => void {
             return;
           }
 
-          // Never resurrect a note the user deleted on this device.
-          if (await isTombstoned('note', record.id)) {
-            return;
-          }
-
           if (payload.eventType === 'DELETE') {
-            const all = await getAllNotesIncludingDeleted();
-            const existing = all.find((n) => n.id === record.id);
-            if (existing) {
-              await markNotesAsSynced([record.id]);
-              notifyDataChanged();
-            }
+            // Remote delete (from another device or earlier local push).
+            // Hard-delete locally AND tombstone so it can never resurrect from a pull.
+            await hardDeleteNote(record.id);
+            await addTombstone('note', record.id);
+            notifyDataChanged();
           } else {
             // INSERT or UPDATE
+            // Never resurrect a note the user deleted on this device.
+            if (await isTombstoned('note', record.id)) {
+              return;
+            }
             const rUpdatedAt = Number(record.updated_at || 0);
             const all = await getAllNotesIncludingDeleted();
             const existing = all.find((n) => n.id === record.id);
@@ -625,19 +700,16 @@ export function setupRealtimeSubscription(): () => void {
           const record = (payload.new || payload.old) as any;
           if (!record || !record.id) return;
 
-          // Never resurrect a folder the user deleted on this device.
-          if (await isTombstoned('folder', record.id)) {
-            return;
-          }
-
           if (payload.eventType === 'DELETE') {
-            const all = await getAllFoldersIncludingDeleted();
-            const existing = all.find((f) => f.id === record.id);
-            if (existing) {
-              await markFoldersAsSynced([record.id]);
-              notifyDataChanged();
-            }
+            // Remote folder delete (from another device or earlier local push).
+            await hardDeleteFolder(record.id);
+            await addTombstone('folder', record.id);
+            notifyDataChanged();
           } else {
+            // Never resurrect a folder the user deleted on this device.
+            if (await isTombstoned('folder', record.id)) {
+              return;
+            }
             const rUpdatedAt = Number(record.updated_at || 0);
             const all = await getAllFoldersIncludingDeleted();
             const existing = all.find((f) => f.id === record.id);
@@ -707,4 +779,8 @@ create policy "Anon full access to notes" on public.notes
 -- 5. Enable Realtime publication for both tables
 alter publication supabase_realtime add table public.folders;
 alter publication supabase_realtime add table public.notes;
+
+-- 6. REPLICA IDENTITY FULL so DELETE realtime events carry the old row's id
+alter table public.notes replica identity full;
+alter table public.folders replica identity full;
 `;
