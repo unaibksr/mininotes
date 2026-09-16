@@ -492,14 +492,42 @@ export async function triggerSync(): Promise<void> {
     }
 
     // ---- Cross-device delete reconciliation ----
-    // Every local note that is fully synced AND no longer appears in the
-    // remote active set (filtered by deleted=false) was deleted on another
-    // device. Hard-delete and tombstone it locally.
-    {
-      const remoteActiveIds = new Set(remoteNotes.map((r: any) => r.id));
+    // Fetch ALL active remote ids (not just the incremental pull window) so we
+    // can detect notes that were deleted on another device. We deliberately
+    // do NOT use `remoteNotes` here because it only contains rows with
+    // updated_at > lastSync — long-synced, never-updated-again notes would be
+    // misidentified as ghosts and hard-deleted.
+    let allRemoteActiveIds: Set<string> | null = null;
+    let allRemoteActiveFolderIds: Set<string> | null = null;
+    try {
+      let q = supabase.from('notes').select('id');
+      if (capabilities.noteDeleted) q = q.eq('deleted', false);
+      const { data: idRows, error: idErr } = (await q) as { data: any[] | null; error: any };
+      if (!idErr && idRows) {
+        allRemoteActiveIds = new Set(idRows.map((r: any) => r.id));
+      }
+    } catch {
+      // Best-effort.
+    }
+    if (capabilities.foldersTable) {
+      try {
+        let q = supabase.from('folders').select('id');
+        if (capabilities.folderDeleted) q = q.eq('deleted', false);
+        const { data: fIdRows, error: fIdErr } = (await q) as { data: any[] | null; error: any };
+        if (!fIdErr && fIdRows) {
+          allRemoteActiveFolderIds = new Set(fIdRows.map((r: any) => r.id));
+        }
+      } catch {
+        // Best-effort.
+      }
+    }
+
+    // Hard-delete and tombstone any local synced row that no longer exists
+    // in the remote active set. This is the cross-device-delete reconciliation.
+    if (allRemoteActiveIds) {
       const ghostNoteIds: string[] = [];
       for (const [id, local] of localNoteMap.entries()) {
-        if (remoteActiveIds.has(id)) continue;
+        if (allRemoteActiveIds.has(id)) continue;
         if (tombstonedNoteIds.has(id)) continue;
         if (!local.synced) continue; // only reconcile confirmed-synced rows
         if (unsavedNoteIds.has(id)) continue;
@@ -515,15 +543,13 @@ export async function triggerSync(): Promise<void> {
       }
     }
 
-    // ---- Cross-device folder delete reconciliation ----
-    if (capabilities.foldersTable) {
-      const remoteActiveFolderIds = new Set(remoteFolders.map((r: any) => r.id));
+    if (allRemoteActiveFolderIds && capabilities.foldersTable) {
+      const ghostFolderIds: string[] = [];
       const tombstonedFolderIds = new Set(
         tombstones.filter((t) => t.type === 'folder').map((t) => t.id.split(':')[1])
       );
-      const ghostFolderIds: string[] = [];
       for (const [id, local] of localFolderMap.entries()) {
-        if (remoteActiveFolderIds.has(id)) continue;
+        if (allRemoteActiveFolderIds.has(id)) continue;
         if (tombstonedFolderIds.has(id)) continue;
         if (!local.synced) continue;
         ghostFolderIds.push(id);
