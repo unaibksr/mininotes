@@ -85,7 +85,11 @@ export async function getAllTombstones(): Promise<{ id: string; type: 'note' | '
 
 export async function clearAllTombstones(): Promise<void> {
   const db = await getDatabase();
-  await db.clear('tombstones');
+  try {
+    await db.clear('tombstones');
+  } catch (e) {
+    console.warn('clearAllTombstones: clear tombstones failed', e);
+  }
 }
 
 /**
@@ -94,11 +98,22 @@ export async function clearAllTombstones(): Promise<void> {
  */
 export async function resetLocalDatabase(): Promise<void> {
   const db = await getDatabase();
-  const tx = db.transaction(['notes', 'folders', 'tombstones'], 'readwrite');
-  await tx.objectStore('notes').clear();
-  await tx.objectStore('folders').clear();
-  await tx.objectStore('tombstones').clear();
-  await tx.done;
+  // Clear each store independently so a missing store doesn't abort the rest.
+  try {
+    await db.clear('notes');
+  } catch (e) {
+    console.warn('resetLocalDatabase: clear notes failed', e);
+  }
+  try {
+    await db.clear('folders');
+  } catch (e) {
+    console.warn('resetLocalDatabase: clear folders failed', e);
+  }
+  try {
+    await db.clear('tombstones');
+  } catch (e) {
+    console.warn('resetLocalDatabase: clear tombstones failed', e);
+  }
 }
 
 // ---------------- NOTES STORAGE ----------------
