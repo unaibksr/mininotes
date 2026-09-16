@@ -298,6 +298,13 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
               onClick={async () => {
                 if (!confirm('Reset local data? This wipes all notes, folders, and tombstones from THIS device. Reload to start fresh.')) return;
                 await resetLocalDatabase();
+                // Also clear all app-level localStorage so the next reload
+                // starts truly fresh (no sync state, no Supabase config).
+                try {
+                  localStorage.clear();
+                } catch (e) {
+                  console.warn('localStorage.clear failed', e);
+                }
                 window.location.reload();
               }}
               className="flex-1 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-rose-600 hover:bg-rose-700 text-white transition cursor-pointer"
