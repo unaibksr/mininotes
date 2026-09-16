@@ -5,17 +5,25 @@ import {
   onSyncStatusChange,
   getSavedSupabaseConfig,
   onRemoteDataChange,
+  verifyConnection,
+  getConnectionStatus,
+  onConnectionStatusChange,
 } from '../lib/supabase';
-import { SyncState } from '../types';
+import { SyncState, ConnectionStatus } from '../types';
 
 export function useSyncCoordinator(onRefreshData: () => void) {
   const [syncState, setSyncState] = useState<SyncState>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [connection, setConnection] = useState<ConnectionStatus>(getConnectionStatus());
 
   useEffect(() => {
     const unsubStatus = onSyncStatusChange((state, msg) => {
       setSyncState(state);
       setErrorMessage(msg || null);
+    });
+
+    const unsubConn = onConnectionStatusChange((status) => {
+      setConnection(status);
     });
 
     const unsubData = onRemoteDataChange(() => {
@@ -24,6 +32,7 @@ export function useSyncCoordinator(onRefreshData: () => void) {
 
     return () => {
       unsubStatus();
+      unsubConn();
       unsubData();
     };
   }, [onRefreshData]);
@@ -34,6 +43,9 @@ export function useSyncCoordinator(onRefreshData: () => void) {
       setSyncState('unconfigured');
     }
 
+    // Probe reachability immediately on mount so the UI can render a real status.
+    void verifyConnection();
+
     // Trigger 1: App mount
     triggerSync();
 
@@ -43,6 +55,7 @@ export function useSyncCoordinator(onRefreshData: () => void) {
     // Trigger 3: visibilitychange when tab becomes visible
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
+        void verifyConnection();
         triggerSync();
       }
     };
@@ -50,30 +63,42 @@ export function useSyncCoordinator(onRefreshData: () => void) {
 
     // Trigger 4: focus
     const handleFocus = () => {
+      void verifyConnection();
       triggerSync();
     };
     window.addEventListener('focus', handleFocus);
 
     // Trigger 5: Every 30 seconds
     const interval = setInterval(() => {
+      void verifyConnection();
       triggerSync();
     }, 30000);
+
+    // Re-probe whenever the browser's online state flips.
+    const handleOnline = () => void verifyConnection();
+    const handleOffline = () => void verifyConnection();
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
 
     return () => {
       cleanupRealtime();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
       clearInterval(interval);
     };
   }, []);
 
-  const manualSync = useCallback(() => {
-    triggerSync();
+  const manualSync = useCallback(async () => {
+    await verifyConnection();
+    await triggerSync();
   }, []);
 
   return {
     syncState,
     errorMessage,
+    connection,
     manualSync,
   };
 }

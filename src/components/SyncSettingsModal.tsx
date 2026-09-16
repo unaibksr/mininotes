@@ -17,11 +17,12 @@ import {
   getCapabilities,
   SUPABASE_SQL_SETUP,
 } from '../lib/supabase';
-import { SyncState } from '../types';
+import { SyncState, ConnectionStatus } from '../types';
 
 interface SyncSettingsModalProps {
   isOpen: boolean;
   syncState: SyncState;
+  connection: ConnectionStatus;
   errorMessage: string | null;
   onClose: () => void;
   onRefreshData: () => void;
@@ -30,6 +31,7 @@ interface SyncSettingsModalProps {
 export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
   isOpen,
   syncState,
+  connection,
   errorMessage,
   onClose,
   onRefreshData,
@@ -109,23 +111,41 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
 
         {/* Sync Status Banner */}
         <div className="mt-4 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span
               className={`w-2.5 h-2.5 rounded-full ${
-                syncState === 'synced'
+                connection.online && connection.configured && (connection.reachable || syncState === 'synced')
                   ? 'bg-emerald-500'
                   : syncState === 'syncing'
                   ? 'bg-blue-500 animate-pulse'
-                  : syncState === 'offline'
-                  ? 'bg-amber-500'
-                  : syncState === 'error'
+                  : syncState === 'error' || (connection.configured && !connection.reachable)
                   ? 'bg-rose-500'
-                  : 'bg-slate-400'
+                  : 'bg-amber-500'
               }`}
             />
-            <span className="text-xs font-medium text-slate-700 dark:text-slate-200 capitalize">
-              Status: {syncState === 'unconfigured' ? 'Offline (Local Only)' : syncState}
+            <span className="text-xs font-medium text-slate-700 dark:text-slate-200">
+              {connection.online && connection.configured && (connection.reachable || syncState === 'synced')
+                ? 'Online'
+                : !connection.online
+                ? 'No internet — offline'
+                : !connection.configured
+                ? 'Offline (Local Only)'
+                : syncState === 'syncing'
+                ? 'Syncing…'
+                : syncState === 'error'
+                ? 'Sync error'
+                : 'Connecting…'}
             </span>
+            {connection.projectRef && (
+              <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400">
+                · {connection.projectRef}
+              </span>
+            )}
+            {connection.lastChecked > 0 && (
+              <span className="text-[10px] text-slate-400 dark:text-slate-500">
+                · last checked {new Date(connection.lastChecked).toLocaleTimeString()}
+              </span>
+            )}
           </div>
 
           <button

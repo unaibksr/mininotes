@@ -129,6 +129,14 @@ export type NoteSortOption = 'updated' | 'created' | 'alphabetical';
 
 export type SyncState = 'idle' | 'syncing' | 'synced' | 'error' | 'offline' | 'unconfigured';
 
+export interface ConnectionStatus {
+  online: boolean;
+  configured: boolean;
+  reachable: boolean;
+  lastChecked: number;
+  projectRef: string | null;
+}
+
 export interface SyncCapabilities {
   foldersTable: boolean;
   noteFolderId: boolean;

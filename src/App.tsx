@@ -138,7 +138,7 @@ export default function App() {
   }, [reloadDataFromDb]);
 
   // Sync coordinator handles mount, write, visibilitychange, focus, 30s interval
-  const { syncState, errorMessage } = useSyncCoordinator(reloadDataFromDb);
+  const { syncState, errorMessage, connection } = useSyncCoordinator(reloadDataFromDb);
 
   // Memoize counts by folder
   const countsByFolder = useMemo(() => {
@@ -479,6 +479,7 @@ export default function App() {
               searchQuery={searchQuery}
               theme={theme}
               syncState={syncState}
+              connection={connection}
               sortOption={sortOption}
               countsByFolder={countsByFolder}
               totalNotesCount={totalNotesCount}
@@ -514,6 +515,7 @@ export default function App() {
               note={selectedNote}
               folders={folders}
               syncState={syncState}
+              connection={connection}
               font={font}
               isZenMode={isZenMode}
               isFullscreen={isFullscreen}
@@ -583,6 +585,7 @@ export default function App() {
           <SyncSettingsModal
             isOpen={isSettingsOpen}
             syncState={syncState}
+            connection={connection}
             errorMessage={errorMessage}
             onClose={handleCloseSettings}
             onRefreshData={reloadDataFromDb}

@@ -30,7 +30,7 @@ import {
   FoldVertical,
 } from 'lucide-react';
 import { Editor } from '@tiptap/react';
-import { Note, Folder, SyncState, EditorFont } from '../../types';
+import { Note, Folder, SyncState, EditorFont, ConnectionStatus } from '../../types';
 import { ExportMenu } from './ExportMenu';
 
 interface EditorHeaderProps {
@@ -38,6 +38,7 @@ interface EditorHeaderProps {
   folders: Folder[];
   editor: Editor | null;
   syncState: SyncState;
+  connection: ConnectionStatus;
   isSaving: boolean;
   isZenMode: boolean;
   isFullscreen: boolean;
@@ -60,6 +61,7 @@ export const EditorHeader: React.FC<EditorHeaderProps> = React.memo(({
   folders,
   editor,
   syncState,
+  connection,
   isSaving,
   isZenMode,
   isFullscreen,
@@ -107,25 +109,35 @@ export const EditorHeader: React.FC<EditorHeaderProps> = React.memo(({
               <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-500" />
               <span>Saving...</span>
             </>
+          ) : !connection.online ? (
+            <>
+              <CloudOff className="w-3.5 h-3.5 text-amber-500" />
+              <span>Offline · saved locally</span>
+            </>
+          ) : !connection.configured ? (
+            <>
+              <Cloud className="w-3.5 h-3.5 text-slate-500" />
+              <span>Local only</span>
+            </>
           ) : syncState === 'syncing' ? (
             <>
               <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-500" />
               <span>Syncing...</span>
             </>
-          ) : syncState === 'offline' ? (
+          ) : syncState === 'error' ? (
             <>
-              <CloudOff className="w-3.5 h-3.5 text-amber-500" />
-              <span>Saved offline</span>
+              <CloudOff className="w-3.5 h-3.5 text-rose-500" />
+              <span>Sync error</span>
             </>
-          ) : syncState === 'synced' ? (
+          ) : syncState === 'synced' || connection.reachable ? (
             <>
               <Cloud className="w-3.5 h-3.5 text-emerald-500" />
-              <span>Synced</span>
+              <span>Online</span>
             </>
           ) : (
             <>
-              <Check className="w-3.5 h-3.5 text-emerald-500" />
-              <span>Saved locally</span>
+              <Cloud className="w-3.5 h-3.5 text-slate-500" />
+              <span>Connecting…</span>
             </>
           )}
         </div>

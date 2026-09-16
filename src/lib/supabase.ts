@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
-import { Note, Folder, SyncCapabilities, SyncState } from '../types';
+import { Note, Folder, SyncCapabilities, SyncState, ConnectionStatus } from '../types';
 import {
   getAllNotesIncludingDeleted,
   getAllFoldersIncludingDeleted,
@@ -7,6 +7,8 @@ import {
   putFoldersBatch,
   markNotesAsSynced,
   markFoldersAsSynced,
+  getAllTombstones,
+  isTombstoned,
 } from './db';
 
 const STORAGE_KEY_CONFIG = 'minimalist_notes_supabase_config';
@@ -54,6 +56,21 @@ export function saveSupabaseConfig(config: SupabaseConfig): void {
     folderColor: false,
     probed: false,
   };
+  // Force a fresh connection probe on next verifyConnection().
+  connectionStatus = {
+    online: typeof navigator !== 'undefined' ? navigator.onLine : true,
+    configured: !!(config.url && config.anonKey),
+    reachable: false,
+    lastChecked: 0,
+    projectRef: extractProjectRef(config.url || ''),
+  };
+  for (const fn of connectionListeners) {
+    try {
+      fn(connectionStatus);
+    } catch (e) {
+      // ignore
+    }
+  }
 }
 
 let clientInstance: SupabaseClient | null = null;
@@ -94,6 +111,90 @@ let capabilities: SyncCapabilities = {
 
 export function getCapabilities(): SyncCapabilities {
   return capabilities;
+}
+
+// ---------------- CONNECTION STATUS ----------------
+
+let connectionStatus: ConnectionStatus = {
+  online: typeof navigator !== 'undefined' ? navigator.onLine : true,
+  configured: false,
+  reachable: false,
+  lastChecked: 0,
+  projectRef: null,
+};
+
+export function getConnectionStatus(): ConnectionStatus {
+  return { ...connectionStatus };
+}
+
+function extractProjectRef(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const host = u.hostname;
+    const m = host.match(/^([a-z0-9-]+)\.supabase\.co$/i);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Verifies the Supabase connection is properly configured AND reachable.
+ * - Updates internal cache
+ * - Notifies connection-status listeners
+ */
+export async function verifyConnection(): Promise<ConnectionStatus> {
+  const config = getSavedSupabaseConfig();
+  const isBrowserOnline =
+    typeof navigator === 'undefined' ? true : navigator.onLine;
+  const configured = !!(config.url && config.anonKey);
+  const projectRef = configured ? extractProjectRef(config.url) : null;
+
+  let reachable = false;
+  if (configured && isBrowserOnline) {
+    try {
+      // Probe Supabase REST root with the anon key. A 200/401/403 = reachable.
+      // We use a short timeout so the UI doesn't hang on bad config.
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 6000);
+      const res = await fetch(config.url + '/rest/v1/', {
+        method: 'GET',
+        headers: { apikey: config.anonKey, Authorization: `Bearer ${config.anonKey}` },
+        signal: controller.signal,
+      });
+      clearTimeout(t);
+      // Any HTTP response means we reached the server.
+      reachable = res.status >= 200 && res.status < 500;
+    } catch {
+      reachable = false;
+    }
+  }
+
+  connectionStatus = {
+    online: isBrowserOnline,
+    configured,
+    reachable,
+    lastChecked: Date.now(),
+    projectRef,
+  };
+
+  for (const fn of connectionListeners) {
+    try {
+      fn(connectionStatus);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  return { ...connectionStatus };
+}
+
+type ConnectionListener = (status: ConnectionStatus) => void;
+const connectionListeners = new Set<ConnectionListener>();
+
+export function onConnectionStatusChange(fn: ConnectionListener): () => void {
+  connectionListeners.add(fn);
+  return () => connectionListeners.delete(fn);
 }
 
 /**
@@ -282,10 +383,18 @@ export async function triggerSync(): Promise<void> {
     // Process pull with Last-Write-Wins and protect local unsaved rows
     const allLocalNotes = await getAllNotesIncludingDeleted();
     const localNoteMap = new Map(allLocalNotes.map((n) => [n.id, n]));
+    const tombstones = await getAllTombstones();
+    const tombstonedNoteIds = new Set(
+      tombstones.filter((t) => t.type === 'note').map((t) => t.id.split(':')[1])
+    );
 
     const notesToUpdateLocally: Note[] = [];
     if (remoteNotes && remoteNotes.length > 0) {
       for (const rNote of remoteNotes) {
+        // Never resurrect a note the user deleted on this device.
+        if (tombstonedNoteIds.has(rNote.id)) {
+          continue;
+        }
         const local = localNoteMap.get(rNote.id);
         const rUpdatedAt = Number(rNote.updated_at || 0);
 
@@ -327,23 +436,23 @@ export async function triggerSync(): Promise<void> {
     const foldersToUpdateLocally: Folder[] = [];
 
     if (remoteFolders && remoteFolders.length > 0) {
+      const tombstonedFolderIds = new Set(
+        tombstones.filter((t) => t.type === 'folder').map((t) => t.id.split(':')[1])
+      );
       for (const rFolder of remoteFolders) {
+        // Never resurrect a folder the user deleted on this device.
+        if (tombstonedFolderIds.has(rFolder.id)) continue;
         const local = localFolderMap.get(rFolder.id);
         const rUpdatedAt = Number(rFolder.updated_at || 0);
-
-        if (local && local.updatedAt >= rUpdatedAt) {
-          continue;
-        }
-
-        const updatedFolder: Folder = {
+        if (local && local.updatedAt >= rUpdatedAt) continue;
+        foldersToUpdateLocally.push({
           id: rFolder.id,
           name: rFolder.name || 'Untitled',
           color: rFolder.color || 'sky',
           updatedAt: rUpdatedAt,
           deleted: false,
           synced: true,
-        };
-        foldersToUpdateLocally.push(updatedFolder);
+        });
       }
     }
 
@@ -426,9 +535,13 @@ export async function triggerSync(): Promise<void> {
 
     localStorage.setItem(STORAGE_KEY_LAST_SYNC, syncStartTime.toString());
     notifySyncStatus('synced');
+    // Refresh connection status so the UI shows "Online" with a real reachability probe.
+    void verifyConnection();
   } catch (err: any) {
     console.error('Cloud Sync error:', err);
     notifySyncStatus('error', err?.message || 'Sync failed');
+    // Re-probe connection so the UI can show the actual reachability state.
+    void verifyConnection();
   } finally {
     isSyncInProgress = false;
     if (isSyncPending) {
@@ -465,6 +578,11 @@ export function setupRealtimeSubscription(): () => void {
 
           // Skip incoming events if currently editing this note with unsaved changes
           if (unsavedNoteIds.has(record.id) || activeEditingNoteId === record.id) {
+            return;
+          }
+
+          // Never resurrect a note the user deleted on this device.
+          if (await isTombstoned('note', record.id)) {
             return;
           }
 
@@ -506,6 +624,11 @@ export function setupRealtimeSubscription(): () => void {
         async (payload) => {
           const record = (payload.new || payload.old) as any;
           if (!record || !record.id) return;
+
+          // Never resurrect a folder the user deleted on this device.
+          if (await isTombstoned('folder', record.id)) {
+            return;
+          }
 
           if (payload.eventType === 'DELETE') {
             const all = await getAllFoldersIncludingDeleted();

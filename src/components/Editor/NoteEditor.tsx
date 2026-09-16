@@ -3,7 +3,7 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import TextAlign from '@tiptap/extension-text-align';
 import Placeholder from '@tiptap/extension-placeholder';
-import { Note, Folder, SyncState, EditorFont } from '../../types';
+import { Note, Folder, SyncState, EditorFont, ConnectionStatus } from '../../types';
 import { EditorHeader } from './EditorHeader';
 import { BubbleToolbar } from './BubbleToolbar';
 import { setActiveEditingNote } from '../../lib/supabase';
@@ -19,6 +19,7 @@ interface NoteEditorProps {
   note: Note;
   folders: Folder[];
   syncState: SyncState;
+  connection: ConnectionStatus;
   font: EditorFont;
   isZenMode: boolean;
   isFullscreen: boolean;
@@ -36,6 +37,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
   note,
   folders,
   syncState,
+  connection,
   font,
   isZenMode,
   isFullscreen,
@@ -332,6 +334,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
         folders={folders}
         editor={editor}
         syncState={syncState}
+        connection={connection}
         isSaving={isSaving}
         isZenMode={isZenMode}
         isFullscreen={isFullscreen}

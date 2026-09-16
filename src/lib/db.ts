@@ -17,10 +17,14 @@ interface NotesDBSchema extends DBSchema {
       by_updatedAt: number;
     };
   };
+  tombstones: {
+    key: string;
+    value: { id: string; type: 'note' | 'folder'; deletedAt: number };
+  };
 }
 
 const DB_NAME = 'minimalist_notes_db';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise: Promise<IDBPDatabase<NotesDBSchema>> | null = null;
 
@@ -49,11 +53,34 @@ export function getDatabase(): Promise<IDBPDatabase<NotesDBSchema>> {
             const foldersStore = db.createObjectStore('folders', { keyPath: 'id' });
             foldersStore.createIndex('by_updatedAt', 'updatedAt');
           }
+        } else if (oldVersion < 3) {
+          // Upgrade to version 3: tombstones store to prevent resurrection
+          if (!db.objectStoreNames.contains('tombstones')) {
+            db.createObjectStore('tombstones', { keyPath: 'id' });
+          }
         }
       },
     });
   }
   return dbPromise;
+}
+
+const tombstoneKey = (type: 'note' | 'folder', id: string) => `${type}:${id}`;
+
+export async function addTombstone(type: 'note' | 'folder', id: string): Promise<void> {
+  const db = await getDatabase();
+  await db.put('tombstones', { id: tombstoneKey(type, id), type, deletedAt: Date.now() });
+}
+
+export async function isTombstoned(type: 'note' | 'folder', id: string): Promise<boolean> {
+  const db = await getDatabase();
+  const t = await db.get('tombstones', tombstoneKey(type, id));
+  return !!t;
+}
+
+export async function getAllTombstones(): Promise<{ id: string; type: 'note' | 'folder' }[]> {
+  const db = await getDatabase();
+  return db.getAll('tombstones');
 }
 
 // ---------------- NOTES STORAGE ----------------
@@ -100,6 +127,8 @@ export async function softDeleteNote(id: string): Promise<Note | null> {
     updatedAt: Date.now(),
   };
   await db.put('notes', updatedNote);
+  // Permanent tombstone so the note never resurrects from sync/realtime.
+  await addTombstone('note', id);
   return updatedNote;
 }
 
@@ -114,6 +143,8 @@ export async function restoreNote(id: string): Promise<Note | null> {
     updatedAt: Date.now(),
   };
   await db.put('notes', restored);
+  // Clear the tombstone so a future restore is allowed.
+  await db.delete('tombstones', tombstoneKey('note', id));
   return restored;
 }
 
@@ -161,6 +192,7 @@ export async function softDeleteFolder(id: string): Promise<Folder | null> {
     updatedAt: Date.now(),
   };
   await db.put('folders', updatedFolder);
+  await addTombstone('folder', id);
 
   // Unfile notes that were in this folder
   const allNotes = await db.getAll('notes');

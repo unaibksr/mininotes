@@ -13,7 +13,7 @@ import {
   HelpCircle,
   Check,
 } from 'lucide-react';
-import { Note, Folder, ThemeMode, SyncState, NoteSortOption } from '../../types';
+import { Note, Folder, ThemeMode, SyncState, NoteSortOption, ConnectionStatus } from '../../types';
 import { NoteCard } from './NoteCard';
 import { FolderGrid } from './FolderGrid';
 import { PWAInstallButton } from '../PWAInstallButton';
@@ -27,6 +27,7 @@ interface SidebarProps {
   searchQuery: string;
   theme: ThemeMode;
   syncState: SyncState;
+  connection: ConnectionStatus;
   sortOption: NoteSortOption;
   countsByFolder: Record<string, number>;
   totalNotesCount: number;
@@ -57,6 +58,7 @@ export const Sidebar: React.FC<SidebarProps> = React.memo(({
   searchQuery,
   theme,
   syncState,
+  connection,
   sortOption,
   countsByFolder,
   totalNotesCount,
@@ -113,6 +115,32 @@ export const Sidebar: React.FC<SidebarProps> = React.memo(({
     return foldersById.get(activeFolderFilter)?.name || 'Folder';
   }, [activeFolderFilter, foldersById]);
 
+  const connPill = React.useMemo(() => {
+    const isConnected =
+      connection.online &&
+      connection.configured &&
+      (connection.reachable || syncState === 'synced' || syncState === 'syncing');
+    if (!isConnected) {
+      const reason =
+        !connection.online
+          ? 'No internet'
+          : !connection.configured
+          ? 'Local only'
+          : syncState === 'error'
+          ? 'Sync error'
+          : 'Connecting…';
+      return {
+        label: reason,
+        dot: 'bg-amber-500',
+        text: 'text-amber-700 dark:text-amber-400',
+      };
+    }
+    if (syncState === 'syncing') {
+      return { label: 'Syncing…', dot: 'bg-blue-500 animate-pulse', text: 'text-blue-700 dark:text-blue-400' };
+    }
+    return { label: 'Online', dot: 'bg-emerald-500', text: 'text-emerald-700 dark:text-emerald-400' };
+  }, [connection, syncState]);
+
   return (
     <aside
       id="app-sidebar"
@@ -129,8 +157,12 @@ export const Sidebar: React.FC<SidebarProps> = React.memo(({
             <h1 className="text-sm font-bold text-slate-900 dark:text-white leading-tight">
               Minimalist Notes
             </h1>
-            <span className="text-[10px] text-slate-400 font-medium tracking-wide">
-              Fast • Offline • Sync
+            <span
+              className={`inline-flex items-center gap-1 text-[10px] font-semibold tracking-wide ${connPill.text}`}
+              aria-live="polite"
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${connPill.dot}`} />
+              {connPill.label}
             </span>
           </div>
         </div>
