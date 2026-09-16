@@ -1,0 +1,6 @@
+{
+  "name": "Minimalist Notes",
+  "description": "A minimalist, mobile-first notes Progressive Web App with Tiptap rich-text editing, folders, IndexedDB offline storage, and Supabase cloud sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

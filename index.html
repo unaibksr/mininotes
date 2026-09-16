@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
+    <title>Minimalist Notes</title>
+    <meta name="description" content="A minimalist, mobile-first notes Progressive Web App with Tiptap rich-text editing, folders, IndexedDB offline storage, and Supabase cloud sync." />
+    <meta property="og:title" content="Minimalist Notes" />
+    <meta property="og:description" content="A minimalist, mobile-first notes Progressive Web App with Tiptap rich-text editing, folders, IndexedDB offline storage, and Supabase cloud sync." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="theme-color" content="#f8fafc" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Notes" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem('notes_theme') || 'system';
+          var isDark = saved === 'dark' || (saved === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (isDark) {
+            document.documentElement.classList.add('dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+          }
+          var metaTheme = document.querySelector('meta[name="theme-color"]');
+          if (metaTheme) {
+            metaTheme.setAttribute('content', isDark ? '#0f172a' : '#f8fafc');
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="bg-[#f8fafc] text-slate-900 dark:bg-[#0f172a] dark:text-slate-100 min-h-screen antialiased selection:bg-blue-500/20 selection:text-blue-900 dark:selection:text-blue-200">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
+

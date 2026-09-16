@@ -1,0 +1,201 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  html {
+    font-size: 16px;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Custom scrollbars for clean aesthetic */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.5);
+}
+
+/* Tiptap editor canvas styling */
+.ProseMirror {
+  outline: none;
+  min-height: 280px;
+  font-size: 1.0625rem; /* ~17px for comfortable reading */
+  line-height: 1.7;
+}
+
+.ProseMirror p {
+  margin-bottom: 0.85rem;
+}
+
+/* Visually distinct headings */
+.ProseMirror h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #2563eb; /* blue-600 */
+  margin-top: 1.75rem;
+  margin-bottom: 0.75rem;
+  line-height: 1.25;
+  letter-spacing: -0.025em;
+}
+.dark .ProseMirror h1 {
+  color: #7dd3fc !important; /* sky-300 pastel */
+}
+
+.ProseMirror h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: #4f46e5; /* indigo-600 */
+  margin-top: 1.5rem;
+  margin-bottom: 0.625rem;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+}
+.dark .ProseMirror h2 {
+  color: #c4b5fd !important; /* violet-300 pastel */
+}
+
+.ProseMirror h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #0d9488; /* teal-600 */
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+.dark .ProseMirror h3 {
+  color: #6ee7b7 !important; /* emerald-300 pastel */
+}
+
+/* Bold text renders in light yellow in dark mode */
+.dark .ProseMirror strong,
+.dark .ProseMirror b {
+  color: #fef08a !important; /* light yellow amber-200 */
+  font-weight: 700;
+}
+
+/* Lists */
+.ProseMirror ul {
+  list-style-type: disc;
+  padding-left: 1.6rem;
+  margin-bottom: 0.85rem;
+}
+.ProseMirror ol {
+  list-style-type: decimal;
+  padding-left: 1.6rem;
+  margin-bottom: 0.85rem;
+}
+.ProseMirror li {
+  margin-bottom: 0.35rem;
+}
+.ProseMirror li p {
+  margin-bottom: 0.2rem;
+}
+
+/* Blockquote */
+.ProseMirror blockquote {
+  border-left: 3px solid #94a3b8;
+  padding-left: 1rem;
+  font-style: italic;
+  margin: 1rem 0;
+  color: #475569;
+}
+.dark .ProseMirror blockquote {
+  border-left-color: #64748b;
+  color: #94a3b8;
+}
+
+/* Inline code & Code blocks */
+.ProseMirror code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  background-color: #f1f5f9;
+  color: #0f172a;
+  padding: 0.15rem 0.35rem;
+  border-radius: 0.3rem;
+  font-size: 0.875em;
+}
+.dark .ProseMirror code {
+  background-color: #1e293b;
+  color: #e2e8f0;
+}
+
+.ProseMirror pre {
+  background-color: #0f172a;
+  color: #f8fafc;
+  padding: 1rem;
+  border-radius: 0.625rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+.dark .ProseMirror pre {
+  background-color: #020617;
+  border: 1px solid #1e293b;
+}
+.ProseMirror pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+/* Placeholder */
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #94a3b8;
+  pointer-events: none;
+  height: 0;
+}
+.dark .ProseMirror p.is-editor-empty:first-child::before {
+  color: #64748b;
+}
+
+/* Typography styles */
+.font-sans-editor {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+.font-serif-editor {
+  font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+}
+.font-serif-editor .ProseMirror {
+  font-size: 1.125rem;
+  line-height: 1.8;
+}
+.font-mono-editor {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+.font-mono-editor .ProseMirror {
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
+/* Print Stylesheet for clean paper output */
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  #app-sidebar,
+  #mobile-bottom-nav,
+  #editor-top-toolbar,
+  .no-print {
+    display: none !important;
+  }
+  #note-editor-container {
+    height: auto !important;
+    overflow: visible !important;
+    background: white !important;
+  }
+  .ProseMirror {
+    color: black !important;
+  }
+}
