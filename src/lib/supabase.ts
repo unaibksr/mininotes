@@ -359,7 +359,8 @@ export async function triggerSync(): Promise<void> {
     const { data: remoteNotesRaw, error: notesPullErr } = (await supabase
       .from('notes')
       .select(noteSelectCols.join(','))
-      .gt('updated_at', lastSync)) as { data: any[] | null; error: any };
+      .gt('updated_at', lastSync)
+      .eq('deleted', false)) as { data: any[] | null; error: any };
 
     if (notesPullErr) {
       throw notesPullErr;
@@ -375,40 +376,13 @@ export async function triggerSync(): Promise<void> {
       const { data: fData, error: folderPullErr } = (await supabase
         .from('folders')
         .select(folderSelectCols.join(','))
-        .gt('updated_at', lastSync)) as { data: any[] | null; error: any };
+        .gt('updated_at', lastSync)
+        .eq('deleted', false)) as { data: any[] | null; error: any };
 
       if (folderPullErr) {
         throw folderPullErr;
       }
       remoteFolders = fData || [];
-    }
-
-    // ---- Ghost cleanup (cross-device deletes) ----
-    // Fetch ALL remote note ids so we can detect notes that disappeared
-    // (because they were deleted on another device while we were offline).
-    let allRemoteNoteIds: Set<string> | null = null;
-    let allRemoteFolderIds: Set<string> | null = null;
-    try {
-      const { data: idRows, error: idErr } = (await supabase
-        .from('notes')
-        .select('id')) as { data: any[] | null; error: any };
-      if (!idErr && idRows) {
-        allRemoteNoteIds = new Set(idRows.map((r: any) => r.id));
-      }
-    } catch {
-      // Best-effort; if it fails we fall back to no ghost cleanup.
-    }
-    if (capabilities.foldersTable) {
-      try {
-        const { data: fIdRows, error: fIdErr } = (await supabase
-          .from('folders')
-          .select('id')) as { data: any[] | null; error: any };
-        if (!fIdErr && fIdRows) {
-          allRemoteFolderIds = new Set(fIdRows.map((r: any) => r.id));
-        }
-      } catch {
-        // Best-effort.
-      }
     }
 
     // Process pull with Last-Write-Wins and protect local unsaved rows
@@ -492,52 +466,6 @@ export async function triggerSync(): Promise<void> {
       notifyDataChanged();
     }
 
-    // ---- Ghost cleanup for notes ----
-    // Any local note (not currently edited/unsynced) that doesn't exist on
-    // the remote AND isn't tombstoned on this device was deleted on another
-    // device. Hard-delete and tombstone it locally.
-    if (allRemoteNoteIds) {
-      const ghostIds: string[] = [];
-      for (const [id, local] of localNoteMap.entries()) {
-        if (allRemoteNoteIds.has(id)) continue;
-        if (tombstonedNoteIds.has(id)) continue;
-        if (local.deleted) continue; // already pending local delete
-        if (unsavedNoteIds.has(id)) continue;
-        if (activeEditingNoteId === id && !local.synced) continue;
-        ghostIds.push(id);
-      }
-      if (ghostIds.length > 0) {
-        for (const gid of ghostIds) {
-          await hardDeleteNote(gid);
-          await addTombstone('note', gid);
-        }
-        notifyDataChanged();
-      }
-    }
-
-    // ---- Ghost cleanup for folders ----
-    if (allRemoteFolderIds && capabilities.foldersTable) {
-      const localFolders = await getAllFoldersIncludingDeleted();
-      const localFolderMap2 = new Map(localFolders.map((f) => [f.id, f]));
-      const tombstonedFolderIds = new Set(
-        tombstones.filter((t) => t.type === 'folder').map((t) => t.id.split(':')[1])
-      );
-      const ghostFolderIds: string[] = [];
-      for (const [id, local] of localFolderMap2.entries()) {
-        if (allRemoteFolderIds.has(id)) continue;
-        if (tombstonedFolderIds.has(id)) continue;
-        if (local.deleted) continue;
-        ghostFolderIds.push(id);
-      }
-      if (ghostFolderIds.length > 0) {
-        for (const gid of ghostFolderIds) {
-          await hardDeleteFolder(gid);
-          await addTombstone('folder', gid);
-        }
-        notifyDataChanged();
-      }
-    }
-
     // 2. PUSH PHASE (Local -> Remote)
     // Gather unsynced items
     const reloadedNotes = await getAllNotesIncludingDeleted();
@@ -546,8 +474,13 @@ export async function triggerSync(): Promise<void> {
     const successfulSyncedNoteIds: string[] = [];
     for (const note of unsyncedNotes) {
       if (note.deleted) {
-        // Soft-deleted note -> delete in Supabase
-        const { error: delErr } = await supabase.from('notes').delete().eq('id', note.id);
+        // Soft-deleted note -> mark deleted=true on the server (so cross-device
+        // clients can pick it up on pull). The local row will be hard-deleted
+        // by markNotesAsSynced after a successful push.
+        const { error: delErr } = await supabase
+          .from('notes')
+          .update({ deleted: true, updated_at: note.updatedAt })
+          .eq('id', note.id);
         if (!delErr) {
           successfulSyncedNoteIds.push(note.id);
         }
@@ -584,7 +517,10 @@ export async function triggerSync(): Promise<void> {
 
       for (const folder of unsyncedFolders) {
         if (folder.deleted) {
-          const { error: delErr } = await supabase.from('folders').delete().eq('id', folder.id);
+          const { error: delErr } = await supabase
+            .from('folders')
+            .update({ deleted: true, updated_at: folder.updatedAt })
+            .eq('id', folder.id);
           if (!delErr) {
             successfulSyncedFolderIds.push(folder.id);
           }
@@ -659,18 +595,28 @@ export function setupRealtimeSubscription(): () => void {
           }
 
           if (payload.eventType === 'DELETE') {
-            // Remote delete (from another device or earlier local push).
-            // Hard-delete locally AND tombstone so it can never resurrect from a pull.
+            // Hard DELETE from Supabase (admin/SQL Editor). Hard-delete locally
+            // and tombstone so it never resurrects.
             await hardDeleteNote(record.id);
             await addTombstone('note', record.id);
             notifyDataChanged();
           } else {
-            // INSERT or UPDATE
+            // INSERT or UPDATE (soft-delete arrives here as UPDATE with deleted=true)
             // Never resurrect a note the user deleted on this device.
             if (await isTombstoned('note', record.id)) {
               return;
             }
             const rUpdatedAt = Number(record.updated_at || 0);
+            const rDeleted = !!record.deleted;
+
+            if (rDeleted) {
+              // Cross-device soft-delete: hard-delete locally + tombstone.
+              await hardDeleteNote(record.id);
+              await addTombstone('note', record.id);
+              notifyDataChanged();
+              return;
+            }
+
             const all = await getAllNotesIncludingDeleted();
             const existing = all.find((n) => n.id === record.id);
 
@@ -701,7 +647,6 @@ export function setupRealtimeSubscription(): () => void {
           if (!record || !record.id) return;
 
           if (payload.eventType === 'DELETE') {
-            // Remote folder delete (from another device or earlier local push).
             await hardDeleteFolder(record.id);
             await addTombstone('folder', record.id);
             notifyDataChanged();
@@ -711,6 +656,15 @@ export function setupRealtimeSubscription(): () => void {
               return;
             }
             const rUpdatedAt = Number(record.updated_at || 0);
+            const rDeleted = !!record.deleted;
+
+            if (rDeleted) {
+              await hardDeleteFolder(record.id);
+              await addTombstone('folder', record.id);
+              notifyDataChanged();
+              return;
+            }
+
             const all = await getAllFoldersIncludingDeleted();
             const existing = all.find((f) => f.id === record.id);
 
@@ -745,13 +699,18 @@ export function setupRealtimeSubscription(): () => void {
 
 /**
  * Standard Supabase SQL migration script
+ *
+ * v2 schema: adds a `deleted` boolean column to notes & folders so cross-device
+ * deletes propagate as soft-deletes on the server (rather than hard DELETE),
+ * which is much more reliable with realtime + pull-based sync.
  */
 export const SUPABASE_SQL_SETUP = `-- 1. Create folders table
 create table if not exists public.folders (
   id uuid primary key,
   name text not null,
   color text,
-  updated_at bigint not null
+  updated_at bigint not null,
+  deleted boolean not null default false
 );
 
 -- 2. Create notes table
@@ -762,25 +721,47 @@ create table if not exists public.notes (
   updated_at bigint not null,
   folder_id uuid references public.folders(id) on delete set null,
   pinned boolean not null default false,
-  color text
+  color text,
+  deleted boolean not null default false
 );
 
--- 3. Enable Row Level Security (RLS)
+-- 3. Backfill: add the deleted column on tables created by older versions of
+--    this script that predate the soft-delete column.
+alter table public.folders add column if not exists deleted boolean not null default false;
+alter table public.notes   add column if not exists deleted boolean not null default false;
+
+-- 4. Enable Row Level Security
 alter table public.folders enable row level security;
 alter table public.notes enable row level security;
 
--- 4. Create policies allowing full access to anon users (auth-free)
+-- 5. Anon-key policies (auth-free full access)
+drop policy if exists "Anon full access to folders" on public.folders;
 create policy "Anon full access to folders" on public.folders
   for all to anon using (true) with check (true);
 
+drop policy if exists "Anon full access to notes" on public.notes;
 create policy "Anon full access to notes" on public.notes
   for all to anon using (true) with check (true);
 
--- 5. Enable Realtime publication for both tables
-alter publication supabase_realtime add table public.folders;
-alter publication supabase_realtime add table public.notes;
+-- 6. Realtime publication (idempotent)
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and tablename = 'folders'
+  ) then
+    alter publication supabase_realtime add table public.folders;
+  end if;
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and tablename = 'notes'
+  ) then
+    alter publication supabase_realtime add table public.notes;
+  end if;
+end
+$$;
 
--- 6. REPLICA IDENTITY FULL so DELETE realtime events carry the old row's id
+-- 7. REPLICA IDENTITY FULL so DELETE realtime events carry the old row's id
 alter table public.notes replica identity full;
 alter table public.folders replica identity full;
 `;
